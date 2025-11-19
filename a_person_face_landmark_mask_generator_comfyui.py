@@ -1,5 +1,6 @@
 import os
 import sys
+import math
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -9,6 +10,7 @@ import numpy as np
 from PIL import Image
 import mediapipe as mp
 from .a_person_mask_generator_comfyui import APersonMaskGenerator
+
 
 
 class APersonFaceLandmarkMaskGenerator:
@@ -181,13 +183,29 @@ class APersonFaceLandmarkMaskGenerator:
                     {"default": 0.40, "min": 0.01, "max": 1.0, "step": 0.01},
                 ),
                 "refine_mask": true_widget,
+                "mask_morphology": (
+                    ["none", "dilate", "erode"],
+                ),
+                "morphology_kernel_size": (
+                    "INT",
+                    {"default": 3, "min": 1, "max": 31, "step": 2},
+                ),
+                "iteration": (
+                    "INT",
+                    {"default": 1, "min": 1, "max": 10, "step": 1},
+                ),
+                "gaussian_blur_std": (
+                    "FLOAT",
+                    {"default": 0.0, "min": 0.0, "max": 50.0, "step": 0.1},
+                ),
             },
         }
 
 
+
     CATEGORY = "A Person Mask Generator - David Bielejeski"
-    RETURN_TYPES = ("MASK",)
-    RETURN_NAMES = ("masks",)
+    RETURN_TYPES = ("MASK", "IMAGE",)
+    RETURN_NAMES = ("masks", "overlaid",)
 
     FUNCTION = "generate_mask"
 
@@ -206,24 +224,11 @@ class APersonFaceLandmarkMaskGenerator:
         number_of_faces: int,
         confidence: float,
         refine_mask: bool,
+        mask_morphology: str = "none",
+        morphology_kernel_size: int = 3,
+        iteration: int = 1,
+        gaussian_blur_std: float = 0.0,
     ):
-
-        """Create a segmentation mask from an image
-
-        Args:
-            image (torch.Tensor): The image to create the mask for.
-            face (bool): create a mask for the face.
-            left_eyebrow (bool): create a mask for the left eyebrow.
-            right_eyebrow (bool): create a mask for the right eyebrow.
-            left_eye (bool): create a mask for the left eye.
-            right_eye (bool): create a mask for the right eye.
-            left_pupil (bool): create a mask for the left eye pupil.
-            right_pupil (bool): create a mask for the right eye pupil.
-            lips (bool): create a mask for the lips.
-
-        Returns:
-            torch.Tensor: The segmentation masks.
-        """
 
         # use our APersonMaskGenerator with the face specified to get the image we should focus on
 
@@ -243,6 +248,7 @@ class APersonFaceLandmarkMaskGenerator:
             )
 
         res_masks = []
+        res_overlaid = []
         with mp.solutions.face_mesh.FaceMesh(
             static_image_mode=True,
             refine_landmarks=True,
@@ -367,6 +373,22 @@ class APersonFaceLandmarkMaskGenerator:
                             )
 
 
+                # Apply morphology if requested
+                if mask_morphology in ["dilate", "erode"]:
+                    kernel = cv.getStructuringElement(
+                        cv.MORPH_ELLIPSE, (morphology_kernel_size, morphology_kernel_size)
+                    )
+                    if mask_morphology == "dilate":
+                        mask = cv.dilate(mask, kernel, iterations=iteration)
+                    elif mask_morphology == "erode":
+                        mask = cv.erode(mask, kernel, iterations=iteration)
+
+                # Apply Gaussian blur if requested
+                if gaussian_blur_std > 0.0:
+                    kernel_radius = max(1, int(math.ceil(gaussian_blur_std * 3)))
+                    kernel_size = kernel_radius * 2 + 1
+                    mask = cv.GaussianBlur(mask, (kernel_size, kernel_size), gaussian_blur_std)
+
                 # Create the image
                 mask_image = Image.fromarray(mask)
 
@@ -383,4 +405,23 @@ class APersonFaceLandmarkMaskGenerator:
 
                 res_masks.append(tensor_mask)
 
-        return (torch.cat(res_masks, dim=0),)
+                # Build overlaid image (input image with mask in red)
+                overlay_rgb = image_pil.convert("RGB")
+                mask_arr = np.array(mask_image.convert("L")) / 255.0
+                mask_arr = np.clip(mask_arr, 0.0, 1.0)[..., None]
+
+                overlay_np = np.array(overlay_rgb).astype(np.float32)
+                red_layer = np.zeros_like(overlay_np)
+                red_layer[..., 0] = 255.0
+
+                alpha = 0.5
+                overlay_np = overlay_np * (1.0 - alpha * mask_arr) + red_layer * (alpha * mask_arr)
+                overlay_np = np.clip(overlay_np, 0, 255).astype(np.uint8)
+                # concate overlay_np with mask, side by side
+                overlay_np = np.concatenate([overlay_np, np.repeat(mask_arr * 255, 3, axis=-1)], axis=1)
+
+                overlaid_image = torch.from_numpy(overlay_np.astype(np.float32) / 255.0)[None,]
+                res_overlaid.append(overlaid_image)
+
+        return (torch.cat(res_masks, dim=0), torch.cat(res_overlaid, dim=0),)
+
