@@ -139,6 +139,11 @@ class APersonFaceLandmarkMaskGenerator:
         78,
     ]
 
+    FACEMESH_INNER_MOUTH = [
+        78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308, 415, 310, 311, 312, 13, 82, 81, 80, 191
+    ]
+
+
     def __init__(self):
         pass
 
@@ -166,6 +171,7 @@ class APersonFaceLandmarkMaskGenerator:
                 "left_pupil": false_widget,
                 "right_pupil": false_widget,
                 "lips": true_widget,
+                "inner_mouth": false_widget,
                 "number_of_faces": (
                     "INT",
                     {"default": 1, "min": 1, "max": 10, "step": 1},
@@ -177,6 +183,7 @@ class APersonFaceLandmarkMaskGenerator:
                 "refine_mask": true_widget,
             },
         }
+
 
     CATEGORY = "A Person Mask Generator - David Bielejeski"
     RETURN_TYPES = ("MASK",)
@@ -195,10 +202,12 @@ class APersonFaceLandmarkMaskGenerator:
         left_pupil: bool,
         right_pupil: bool,
         lips: bool,
+        inner_mouth: bool,
         number_of_faces: int,
         confidence: float,
         refine_mask: bool,
     ):
+
         """Create a segmentation mask from an image
 
         Args:
@@ -273,6 +282,7 @@ class APersonFaceLandmarkMaskGenerator:
                             left_pupil,
                             right_pupil,
                             lips,
+                            inner_mouth,
                         ]
                     )
                     else None
@@ -350,6 +360,12 @@ class APersonFaceLandmarkMaskGenerator:
                             cv.fillPoly(
                                 mask, [np.array(lips_coords, dtype=np.int32)], 255
                             )
+                        if inner_mouth:
+                            inner_mouth_coords = [mesh_coords[p] for p in self.FACEMESH_INNER_MOUTH]
+                            cv.fillPoly(
+                                mask, [np.array(inner_mouth_coords, dtype=np.int32)], 255
+                            )
+
 
                 # Create the image
                 mask_image = Image.fromarray(mask)
